@@ -13,8 +13,6 @@ import (
 	"strings"
 )
 
-var CacheDir = "./cache"
-
 // HopByHopHeaders are removed on load.
 // http://www.w3.org/Protocols/rfc2616/rfc2616-sec13.html
 var HopByHopHeaders = []string{
@@ -29,7 +27,10 @@ var HopByHopHeaders = []string{
 }
 
 type Request struct {
-	cacheName     string
+	cachePath      string
+	cacheName      string
+	cacheNameStyle CacheNameStyle
+
 	transport     http.RoundTripper
 	original      *http.Request
 	proxied       *http.Request
@@ -266,8 +267,26 @@ func (request *Request) FetchCache() *Response {
 	return nil
 }
 
+func (request *Request) SetCachePath(path string) *Request {
+	request.cachePath = path
+	return request
+}
+
+func (request *Request) CachePath() string {
+	if request.cachePath == "" {
+		return "./cache"
+	}
+
+	return request.cachePath
+}
+
+func (request *Request) SetCacheNameStyle(style CacheNameStyle) *Request {
+	request.cacheNameStyle = style
+	return request
+}
+
 func (request *Request) SetCacheName(name string) *Request {
-	request.cacheName = filepath.Join(CacheDir, name)
+	request.cacheName = filepath.Join(request.CachePath(), name)
 	return request
 }
 
@@ -276,12 +295,19 @@ func (request *Request) CacheName() string {
 		return request.cacheName
 	}
 
-	var buffer bytes.Buffer
-	log.Debug("Generating SHA1 Hash Of Request")
-	request.proxied.WriteProxy(&buffer)
-	return filepath.Join(CacheDir, fmt.Sprintf(
-		"%x", sha1.Sum(buffer.Bytes()),
-	))
+	switch request.cacheNameStyle {
+	// case CacheNameSHA1:
+	default:
+		var buffer bytes.Buffer
+		log.Debug("Generating SHA1 Hash Of Request")
+		request.proxied.WriteProxy(&buffer)
+		return filepath.Join(
+			request.CachePath(),
+			fmt.Sprintf("%x", sha1.Sum(
+				buffer.Bytes()),
+			),
+		)
+	}
 }
 
 func (request *Request) copyHeaders() {

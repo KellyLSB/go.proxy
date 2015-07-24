@@ -15,7 +15,9 @@ I've seen so many Proxy Caches out there but so many don't meet my needs; maybe 
 
 		func main() {
 			req, err := http.NewRequest("GET", "http://example.com", nil)
-			response, err := proxy.NewProxy().UseURICacheName().RoundTrip(req)
+
+			response, err := proxy.NewProxy().
+				UseCacheNameSyle(proxy.CacheNameSHA1).RoundTrip(req)
 
 			// Haha!
 			response.Write(os.Stdout)
@@ -25,7 +27,7 @@ I've seen so many Proxy Caches out there but so many don't meet my needs; maybe 
 
 ## Proxy Features
 
-As a proxy I wanted to ensure the highest quality of service. As a result you will find caching options, header injections, `RoundTrip()`, `ServeHTTP()` and Location header redirects; among other features.
+As a proxy I wanted to ensure the highest quality of service. As a result you will find caching options, header injections, `RoundTrip()`, `ServeHTTP()`, `Location` header redirects and `GunzipBodyTo()` helers on the Response; among other features.
 
 ## Cache Features
 

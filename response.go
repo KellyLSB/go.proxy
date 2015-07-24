@@ -2,7 +2,9 @@ package proxy
 
 import (
 	"bytes"
+	"compress/gzip"
 	"io"
+	"io/ioutil"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -10,13 +12,16 @@ import (
 	"time"
 )
 
+// Response is a tool for interacting
+// with *http.Responses including a caching layer
 type Response struct {
+	cacheName string
 	err       error
 	proxied   *http.Response
-	cacheName string
 	cached    bool
 }
 
+// LoadResponse loads a *http.Response and returns a *Response object
 func LoadResponse(httpResponse *http.Response, err error) *Response {
 	log.Debug("Loading Response")
 	var buffer bytes.Buffer
@@ -29,6 +34,7 @@ func LoadResponse(httpResponse *http.Response, err error) *Response {
 	}).RemoveHeaders(HopByHopHeaders...)
 }
 
+// RemoveHeaders deletes the named headers from the response headers.
 func (response *Response) RemoveHeaders(headers ...string) *Response {
 	for _, header := range headers {
 		response.proxied.Header.Del(header)
@@ -37,28 +43,38 @@ func (response *Response) RemoveHeaders(headers ...string) *Response {
 	return response
 }
 
+// SetCacheName sets the filename relative to the working directory
+// that is used when saving / retrieving cached responses.
 func (response *Response) SetCacheName(name string) *Response {
 	response.cacheName = name
 	return response
 }
 
+// MarkAsCached is used by the Request when loading
+// a response from a cached file.
 func (response *Response) MarkAsCached() *Response {
 	response.cached = true
 	return response
 }
 
+// GetHeaderValues returns an string slice
+// of values of a named response header.
 func (response *Response) GetHeaderValues(header string) []string {
 	return response.proxied.Header[header]
 }
 
+// GetHeader returns the string value of a named response header.
 func (response *Response) GetHeader(header string) string {
 	return response.proxied.Header.Get(header)
 }
 
+// GetHeaders returns the http.Header object from the resonse.
 func (response *Response) GetHeaders() http.Header {
 	return response.proxied.Header
 }
 
+// HasHeaderValue performs if checking for
+// header multi-values including assigned subvalues.
 func (response *Response) HasHeaderValue(
 	header string, has string,
 ) (string, bool) {
@@ -76,6 +92,11 @@ func (response *Response) HasHeaderValue(
 	return "", false
 }
 
+// CacheExpired checks if the Response is cached and is expired.
+// This is done by comparing information from a HEAD only response.
+//
+// Note: The HEAD only response is retrieved by
+// a function passed from a Request object.
 func (response *Response) CacheExpired(
 	latestHeadFunc func() *Response,
 ) bool {
@@ -178,6 +199,42 @@ func (response *Response) CacheExpired(
 	return false
 }
 
+// WriteHeaderTo writes the response headers to the writers.
+func (response *Response) WriteHeaderTo(writers ...io.Writer) {
+	response.proxied.Header.Write(io.MultiWriter(writers...))
+}
+
+// WriteBodyTo writes the response body to the writers...
+func (response *Response) WriteBodyTo(writers ...io.Writer) {
+	reader := response.copyBody()
+	if reader == nil {
+		return
+	}
+
+	io.Copy(io.MultiWriter(writers...), reader)
+}
+
+// GunzipBodyTo using gunzip on the body then
+// writes the uncompressed body to the writers.
+func (response *Response) GunzipBodyTo(writers ...io.Writer) {
+	reader := response.copyBody()
+	if reader == nil {
+		return
+	}
+
+	gzread, err := gzip.NewReader(reader)
+	if err != nil {
+		log.Error(err.Error())
+		return
+	}
+
+	io.Copy(io.MultiWriter(writers...), gzread)
+}
+
+// WriteTo handles the caching process and writing the
+// full response body (including) headers to the writers.
+//
+// Note: WriteTo also handle *http.ResponseWriter
 func (response *Response) WriteTo(writers ...interface{}) {
 
 	// Don't overwrite if the Reponse is from cache.
@@ -202,7 +259,7 @@ func (response *Response) WriteTo(writers ...interface{}) {
 		goto WriteIt
 	}
 
-	// Ensure the CacheDir exists.
+	// Ensure the cache file path exists.
 	if os.MkdirAll(filepath.Dir(response.cacheName), 0700) != nil {
 		log.Error("Cache Directory is not writeable!\n")
 		goto WriteIt
@@ -228,7 +285,9 @@ func (response *Response) writeTo(writers ...interface{}) {
 			// Also http.ResponseWriter won't validate as an io.Writer
 			CopyHeaders(writer.Header(), response.proxied.Header)
 			writer.WriteHeader(response.proxied.StatusCode)
-			ioWriters = append(ioWriters, io.Writer(writer))
+			response.WriteBodyTo(io.Writer(writer))
+		case io.PipeWriter:
+			response.WriteBodyTo(io.Writer(&writer))
 		case io.Writer:
 			ioWriters = append(ioWriters, writer)
 		}
@@ -237,4 +296,19 @@ func (response *Response) writeTo(writers ...interface{}) {
 	// Write to everything at once; since the response
 	// is a ReadCloser we only get one shot. xD
 	response.proxied.Write(io.MultiWriter(ioWriters...))
+}
+
+func (response *Response) copyBody() (reader io.ReadCloser) {
+	var buf bytes.Buffer
+	var err error
+
+	_, err = buf.ReadFrom(response.proxied.Body)
+	err = response.proxied.Body.Close()
+
+	if err != nil {
+		log.Error(err.Error())
+	}
+
+	response.proxied.Body = ioutil.NopCloser(&buf)
+	return ioutil.NopCloser(bytes.NewReader(buf.Bytes()))
 }
